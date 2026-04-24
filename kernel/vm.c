@@ -341,20 +341,22 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint64 pa, i;
   uint flags;
   char *mem;
-  int szinc;
 
-  for(i = 0; i < sz; i += szinc){
-    szinc = PGSIZE;
-    szinc = PGSIZE;
+  // Xóa bỏ biến szinc không cần thiết, dùng PGSIZE trực tiếp
+  for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
+    flags = PTE_FLAGS(*pte) & ~(PTE_A | PTE_D);
+    
     if((mem = kalloc()) == 0)
       goto err;
+    
     memmove(mem, (char*)pa, PGSIZE);
+    
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
       kfree(mem);
       goto err;
@@ -366,7 +368,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
 }
-
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
 void
@@ -488,17 +489,45 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 
 #ifdef LAB_PGTBL
+// Hàm bổ trợ đệ quy để in bảng phân trang
 void
-vmprint(pagetable_t pagetable) {
-  // your code here
+_vmprint(pagetable_t pagetable, int level)
+{
+  // Có 512 mục (entries) trong mỗi trang bảng phân trang
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    
+    // Kiểm tra nếu PTE hợp lệ (PTE_V)
+    if(pte & PTE_V){
+      // In các dấu chấm dựa trên cấp độ (level)
+      // Cấp 0: .. , Cấp 1: .. .. , Cấp 2: .. .. ..
+      for(int j = 0; j <= level; j++){
+        if(j > 0) printf(" ");
+        printf("..");
+      }
+
+      uint64 child = PTE2PA(pte);
+      printf("%d: pte %p pa %p\n", i, (void*)pte, (void*)child);
+
+      // Nếu pte chưa phải là lá (vẫn còn tầng dưới) và level < 2
+      // Trong RISC-V Sv39, chúng ta có 3 cấp (0, 1, 2)
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0 && level < 2){
+        _vmprint((pagetable_t)child, level + 1);
+      }
+    }
+  }
 }
-#endif
 
-
-
+void
+vmprint(pagetable_t pagetable)
+{
+  printf("page table %p\n", pagetable);
+  _vmprint(pagetable, 0);
+}
 #ifdef LAB_PGTBL
 pte_t*
 pgpte(pagetable_t pagetable, uint64 va) {
   return walk(pagetable, va, 0);
 }
+#endif
 #endif
